@@ -1,4 +1,11 @@
-greenlet==3.3.2
-playwright==1.58.0
-pyee==13.0.1
-typing_extensions==4.15.0
+PyQt6==6.10.2
+pandas==3.0.1
+pymorphy3==2.0.6
+pymorphy3-dicts-ru==2.4.417150.4580142
+rapidfuzz==3.14.3
+textblob==0.19.0
+wordcloud==1.9.6
+matplotlib==3.10.8
+lxml==6.0.2
+beautifulsoup4==4.14.3
+pyinstaller==6.19.0

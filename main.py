@@ -1,18 +1,116 @@
 import sys
 import os
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
-                            QHBoxLayout, QPushButton, QLineEdit, QTextBrowser,
+                            QHBoxLayout, QPushButton, QLineEdit,
                             QFileDialog, QLabel, QListWidget, QTabWidget, QSplitter,
                             QTableWidget, QTableWidgetItem, QCheckBox, QComboBox,
-                            QDateEdit, QHeaderView, QAbstractItemView, QGraphicsView,
-                            QGraphicsScene, QGraphicsPixmapItem, QListWidgetItem, QProgressBar)
-from PyQt6.QtCore import Qt, QDate, QTimer, QThread, pyqtSignal
-from PyQt6.QtGui import QFont, QColor, QTextCharFormat, QCursor, QPixmap, QImage
-from PyQt6.QtWidgets import QMessageBox
+                            QDateEdit, QHeaderView, QAbstractItemView,
+                            QListWidgetItem, QProgressBar, QListView, QStyledItemDelegate,
+                            QMenu)
+from PyQt6.QtCore import Qt, QDate, QTimer, QThread, pyqtSignal, QAbstractListModel, QSize, QPoint
+from PyQt6.QtGui import QFont, QColor, QCursor, QPixmap, QImage, QPainter, QTextDocument, QAbstractTextDocumentLayout
+from PyQt6.QtWidgets import QMessageBox, QStyle
 import html
+import re
 
 from parser import TelegramParser
 from features import SmartFeatures
+
+class MessageListModel(QAbstractListModel):
+    def __init__(self, messages=None, highlight_text="", is_dark_mode=True):
+        super().__init__()
+        self.messages = messages or []
+        self.highlight_text = highlight_text
+        self.is_dark_mode = is_dark_mode
+
+    def data(self, index, role):
+        if not index.isValid():
+            return None
+
+        if role == Qt.ItemDataRole.DisplayRole:
+            msg = self.messages[index.row()]
+            sender = html.escape(msg['sender'])
+            time_str = msg['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if msg.get('timestamp') else "Unknown time"
+
+            # Escape HTML characters first to prevent XSS / UI breaking
+            text = html.escape(msg.get('text', ''))
+
+            # Highlighting
+            if self.highlight_text:
+                escaped_highlight = html.escape(self.highlight_text)
+                if escaped_highlight.lower() in text.lower():
+                    # Simple case-insensitive highlight
+                    pattern = re.compile(re.escape(escaped_highlight), re.IGNORECASE)
+                    text = pattern.sub(lambda m: f'<span style="background-color: yellow; color: black;">{m.group(0)}</span>', text)
+
+            media_info = f"<br><i>[Вложение: {html.escape(msg['media'])}]</i>" if msg.get('media') else ""
+
+            color = "#89b4fa" if self.is_dark_mode else "#0d6efd"
+
+            html_content = f"<div style='padding: 5px; font-family: Segoe UI; font-size: 13px;'>"
+            html_content += f"<b style='color: {color};'>{sender}</b> <small style='color: gray;'>({time_str})</small><br>"
+            html_content += f"{text}{media_info}"
+            html_content += f"</div>"
+            return html_content
+
+        return None
+
+    def rowCount(self, index=None):
+        return len(self.messages)
+
+    def set_messages(self, messages, highlight_text=""):
+        self.beginResetModel()
+        self.messages = messages
+        self.highlight_text = highlight_text
+        self.endResetModel()
+
+    def set_dark_mode(self, is_dark):
+        self.is_dark_mode = is_dark
+        self.layoutChanged.emit()
+
+class HTMLDelegate(QStyledItemDelegate):
+    def paint(self, painter, option, index):
+        options = option
+        self.initStyleOption(options, index)
+
+        painter.save()
+
+        # Draw background
+        if option.state & QStyle.StateFlag.State_Selected:
+            painter.fillRect(option.rect, option.palette.highlight())
+        else:
+            painter.fillRect(option.rect, option.palette.base())
+
+        # Add bottom border
+        border_color = QColor("#45475a" if option.palette.base().color().lightness() < 128 else "#ced4da")
+        painter.setPen(border_color)
+        painter.drawLine(option.rect.bottomLeft(), option.rect.bottomRight())
+
+        doc = QTextDocument()
+        doc.setHtml(options.text)
+        doc.setTextWidth(option.rect.width())
+
+        ctx = QAbstractTextDocumentLayout.PaintContext()
+
+        # Set text color based on selection and theme
+        if option.state & QStyle.StateFlag.State_Selected:
+            ctx.palette.setColor(doc.documentLayout().palette().color(ctx.palette.ColorRole.Text), option.palette.highlightedText().color())
+        else:
+            ctx.palette.setColor(doc.documentLayout().palette().color(ctx.palette.ColorRole.Text), option.palette.text().color())
+
+        painter.translate(option.rect.x(), option.rect.y())
+        doc.documentLayout().draw(painter, ctx)
+        painter.restore()
+
+    def sizeHint(self, option, index):
+        options = option
+        self.initStyleOption(options, index)
+
+        doc = QTextDocument()
+        doc.setHtml(options.text)
+        doc.setTextWidth(option.rect.width())
+
+        return QSize(int(doc.idealWidth()), int(doc.size().height()) + 10) # 10 for padding
 
 class ParserThread(QThread):
     progress = pyqtSignal(int)
@@ -197,12 +295,22 @@ class TGReaderApp(QMainWindow):
         teletype_layout.addWidget(self.slider_speed)
         teletype_layout.addStretch()
 
-        self.chat_browser = QTextBrowser()
-        self.chat_browser.setOpenExternalLinks(True)
-        self.chat_browser.anchorClicked.connect(self.handle_link)
+        # Virtualized List View for massive performance gains
+        self.chat_list_view = QListView()
+        self.chat_list_view.setItemDelegate(HTMLDelegate())
+        self.chat_model = MessageListModel(is_dark_mode=self.is_dark_mode)
+        self.chat_list_view.setModel(self.chat_model)
+        self.chat_list_view.setUniformItemSizes(False)
+        self.chat_list_view.setWordWrap(True)
+
+        # Context menu for bookmarks
+        self.chat_list_view.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.chat_list_view.customContextMenuRequested.connect(self.show_context_menu)
+        # Double click to show context (if it was a search result)
+        self.chat_list_view.doubleClicked.connect(self.on_chat_double_clicked)
 
         reader_layout.addLayout(teletype_layout)
-        reader_layout.addWidget(self.chat_browser)
+        reader_layout.addWidget(self.chat_list_view)
         self.tabs.addTab(self.tab_reader, "💬 Чат")
 
         # 2. Analytics Dashboard Tab
@@ -250,6 +358,7 @@ class TGReaderApp(QMainWindow):
 
     def toggle_theme(self):
         self.is_dark_mode = not self.is_dark_mode
+        self.chat_model.set_dark_mode(self.is_dark_mode)
         self.apply_theme()
 
     def apply_theme(self):
@@ -259,7 +368,7 @@ class TGReaderApp(QMainWindow):
                 QWidget { background-color: #1e1e2e; color: #cdd6f4; }
                 QPushButton { background-color: #89b4fa; color: #11111b; border-radius: 5px; padding: 5px; font-weight: bold; }
                 QPushButton:hover { background-color: #b4befe; }
-                QLineEdit, QComboBox, QDateEdit, QListWidget, QTableWidget, QTextBrowser {
+                QLineEdit, QComboBox, QDateEdit, QListWidget, QTableWidget, QListView {
                     background-color: #313244; color: #cdd6f4; border: 1px solid #45475a; border-radius: 4px; padding: 5px;
                 }
                 QHeaderView::section { background-color: #313244; color: #cdd6f4; }
@@ -273,7 +382,7 @@ class TGReaderApp(QMainWindow):
                 QWidget { background-color: #f8f9fa; color: #212529; }
                 QPushButton { background-color: #0d6efd; color: white; border-radius: 5px; padding: 5px; font-weight: bold; }
                 QPushButton:hover { background-color: #0b5ed7; }
-                QLineEdit, QComboBox, QDateEdit, QListWidget, QTableWidget, QTextBrowser {
+                QLineEdit, QComboBox, QDateEdit, QListWidget, QTableWidget, QListView {
                     background-color: white; color: #212529; border: 1px solid #ced4da; border-radius: 4px; padding: 5px;
                 }
                 QHeaderView::section { background-color: #e9ecef; color: #212529; }
@@ -384,72 +493,85 @@ class TGReaderApp(QMainWindow):
             self.media_list.addItem(item)
 
     def display_messages(self, messages_to_display, highlight_text=""):
-        html = "<html><body>"
+        # We now use the MVVM approach (QListView + Model) which solves the ANR
+        self.chat_model.set_messages(messages_to_display, highlight_text)
 
-        for msg in messages_to_display:
-            import html as html_lib
-            sender = html_lib.escape(msg['sender'])
-            time_str = msg['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if msg.get('timestamp') else "Unknown time"
+    def show_context_menu(self, position: QPoint):
+        index = self.chat_list_view.indexAt(position)
+        if not index.isValid():
+            return
 
-            # Escape HTML characters first to prevent XSS / UI breaking
-            text = html_lib.escape(msg.get('text', ''))
+        menu = QMenu()
+        action_bookmark = menu.addAction("🔖 Добавить в закладки")
+        action_context = menu.addAction("👁️ Показать контекст сообщения")
 
-            # Highlighting
-            if highlight_text:
-                escaped_highlight = html_lib.escape(highlight_text)
-                if escaped_highlight.lower() in text.lower():
-                    # Simple case-insensitive highlight
-                    import re
-                    pattern = re.compile(re.escape(escaped_highlight), re.IGNORECASE)
-                    text = pattern.sub(lambda m: f'<span style="background-color: yellow; color: black;">{m.group(0)}</span>', text)
+        action = menu.exec(self.chat_list_view.viewport().mapToGlobal(position))
 
-            media_info = f"<br><i>[Вложение: {html_lib.escape(msg['media'])}]</i>" if msg.get('media') else ""
+        if action == action_bookmark:
+            self.add_bookmark(index)
+        elif action == action_context:
+            self.on_chat_double_clicked(index)
 
-            # Add bookmark link
-            bm_link = f'<a href="bookmark:{msg["id"]}">[🔖 В закладки]</a>'
+    def add_bookmark(self, index):
+        msg = self.chat_model.messages[index.row()]
+        msg_id = msg['id']
 
-            color = "#89b4fa" if self.is_dark_mode else "#0d6efd"
-            html += f"<div style='margin-bottom: 10px; padding: 5px; border-bottom: 1px solid gray;'>"
-            html += f"<b style='color: {color};'>{sender}</b> <small>({time_str})</small> {bm_link}<br>"
-            html += f"{text}{media_info}"
-            html += f"</div>"
+        if msg_id not in self.bookmarks:
+            self.bookmarks.add(msg_id)
+            item_text = f"{msg['sender']}: {msg.get('text', '')[:30]}..."
+            item = QListWidgetItem(item_text)
+            item.setData(Qt.ItemDataRole.UserRole, msg_id)
+            self.bookmarks_list.addItem(item)
+            QMessageBox.information(self, "Закладки", "Сообщение добавлено в закладки!")
+        else:
+            QMessageBox.information(self, "Закладки", "Это сообщение уже в закладках.")
 
-        html += "</body></html>"
-        self.chat_browser.setHtml(html)
+    def on_chat_double_clicked(self, index):
+        msg = self.chat_model.messages[index.row()]
+        self.show_context_by_id(msg['id'])
 
-    def handle_link(self, url):
-        url_str = url.toString()
-        if url_str.startswith("bookmark:"):
-            msg_id = url_str.split(":")[1]
-            if msg_id not in self.bookmarks:
-                self.bookmarks.add(msg_id)
-                # Find message
-                msg = next((m for m in self.messages if m['id'] == msg_id), None)
-                if msg:
-                    item_text = f"{msg['sender']}: {msg['text'][:30]}..."
-                    item = QListWidgetItem(item_text)
-                    item.setData(Qt.ItemDataRole.UserRole, msg_id)
-                    self.bookmarks_list.addItem(item)
-                    QMessageBox.information(self, "Закладки", "Сообщение добавлено в закладки!")
-            else:
-                QMessageBox.information(self, "Закладки", "Это сообщение уже в закладках.")
+    def show_context_by_id(self, msg_id):
+        context_msgs = self.features.get_context(msg_id, window=10)
+        if context_msgs:
+            self.display_messages(context_msgs)
+            self.tabs.setCurrentIndex(0)
 
     def perform_search(self):
         if not self.features:
             return
 
         query = self.search_input.text().strip()
-        if not query:
-            self.display_messages(self.messages)
-            return
+
+        # We start with all messages and apply filters first
+        results = self.messages
+
+        # User filter
+        selected_user = self.combo_users.currentText()
+        if selected_user != "Все пользователи":
+            results = [msg for msg in results if msg['sender'] == selected_user]
+
+        # Date filter
+        # Get start of day for 'from' and end of day for 'to' to ensure full coverage
+        date_from_dt = self.date_from.date().toPyDate()
+        date_to_dt = self.date_to.date().toPyDate()
+
+        # Filter by date only if the message has a timestamp
+        results = [msg for msg in results if not msg.get('timestamp') or
+                  (date_from_dt <= msg['timestamp'].date() <= date_to_dt)]
+
+        if query:
+            # Create a temporary SmartFeatures object with only the filtered messages
+            # so that search runs ONLY on the filtered subset for maximum performance
+            temp_features = SmartFeatures(results)
+            # Re-use our main lemma cache to keep speed high
+            temp_features.lemma_cache = self.features.lemma_cache
+
+            if self.cb_regex.isChecked():
+                results = temp_features.regex_search(query)
+            else:
+                results = temp_features.smart_search(query)
 
         self.search_results_list.clear()
-
-        if self.cb_regex.isChecked():
-            results = self.features.regex_search(query)
-        else:
-            results = self.features.smart_search(query)
-
         for msg in results:
             time_str = msg['timestamp'].strftime('%Y-%m-%d') if msg.get('timestamp') else ""
             item = QListWidgetItem(f"[{time_str}] {msg['sender']}: {msg['text'][:50]}...")
@@ -457,25 +579,15 @@ class TGReaderApp(QMainWindow):
             self.search_results_list.addItem(item)
 
         self.display_messages(results, highlight_text=query if not self.cb_regex.isChecked() else "")
-        self.lbl_status.setText(f"Найдено сообщений: {len(results)}")
+        self.lbl_status.setText(f"Отображено сообщений: {len(results)}")
 
     def filter_messages(self):
-        if not self.messages:
-            return
-
-        selected_user = self.combo_users.currentText()
-        filtered = self.messages
-
-        if selected_user != "Все пользователи":
-            filtered = [msg for msg in filtered if msg['sender'] == selected_user]
-
-        self.display_messages(filtered)
+        # Trigger the same pipeline
+        self.perform_search()
 
     def show_context(self, item):
         msg_id = item.data(Qt.ItemDataRole.UserRole)
-        context_msgs = self.features.get_context(msg_id, window=10)
-        self.display_messages(context_msgs)
-        self.tabs.setCurrentIndex(0) # Switch to chat tab
+        self.show_context_by_id(msg_id)
 
     def toggle_teletype(self):
         if self.teletype_active:
@@ -490,9 +602,9 @@ class TGReaderApp(QMainWindow):
             self.teletype_active = True
 
     def scroll_teletype(self):
-        scrollbar = self.chat_browser.verticalScrollBar()
+        scrollbar = self.chat_list_view.verticalScrollBar()
         scrollbar.setValue(scrollbar.value() + 50) # Scroll down a bit
-        if scrollbar.value() == scrollbar.maximum():
+        if scrollbar.value() >= scrollbar.maximum():
             self.toggle_teletype() # Auto-stop at the end
 
 

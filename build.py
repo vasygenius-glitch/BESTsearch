@@ -15,6 +15,11 @@ def build_app():
         print(f"Error: {main_script} not found!")
         sys.exit(1)
 
+    # Explicitly check for icon
+    icon_param = []
+    if os.path.exists('icon.ico'):
+        icon_param = ['--icon=icon.ico']
+
     # Base PyInstaller command
     cmd = [
         'pyinstaller',
@@ -23,7 +28,7 @@ def build_app():
         '--windowed',
         '--name=TG_Reader_PRO',
         '--clean',
-    ]
+    ] + icon_param
 
     # Important hidden imports for the packages we are using
     hidden_imports = [
@@ -33,13 +38,18 @@ def build_app():
         'wordcloud',
         'pandas',
         'matplotlib',
-        'bs4',
         'lxml',
+        'lxml.html',
         'textblob'
     ]
 
     for imp in hidden_imports:
         cmd.extend(['--hidden-import', imp])
+
+    # Collect all data for tricky NLP libraries so they don't crash the .exe
+    collect_data = ['pymorphy3_dicts_ru', 'wordcloud']
+    for data_pkg in collect_data:
+        cmd.extend(['--collect-all', data_pkg])
 
     cmd.append(main_script)
 

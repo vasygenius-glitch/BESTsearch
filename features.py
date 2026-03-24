@@ -14,6 +14,9 @@ class SmartFeatures:
         self.df = pd.DataFrame(messages)
         self.morph = pymorphy3.MorphAnalyzer()
 
+        # Memoization cache for lemmas to massively speed up processing
+        self.lemma_cache = {}
+
         # Stop words for word cloud
         self.stop_words = set([
             'и', 'в', 'во', 'не', 'что', 'он', 'на', 'я', 'с', 'со', 'как', 'а', 'то', 'все', 'она',
@@ -33,8 +36,14 @@ class SmartFeatures:
         ])
 
     def get_lemma(self, word):
+        """⚡ Bolt: Uses memoization cache to convert O(N) NLP overhead into O(1) hash lookups."""
+        if word in self.lemma_cache:
+            return self.lemma_cache[word]
+
         parsed = self.morph.parse(word)[0]
-        return parsed.normal_form
+        lemma = parsed.normal_form
+        self.lemma_cache[word] = lemma
+        return lemma
 
     def smart_search(self, query):
         if not self.messages:
