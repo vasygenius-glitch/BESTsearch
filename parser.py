@@ -7,7 +7,7 @@ class TelegramParser:
     def __init__(self):
         self.messages = []
 
-    def parse_directory(self, directory_path):
+    def parse_directory(self, directory_path, progress_callback=None):
         """⚡ Bolt: Switched from BeautifulSoup to lxml + XPath for blazing fast O(1) DOM traversal."""
         self.messages = []
         html_files = [f for f in os.listdir(directory_path) if f.startswith('messages') and f.endswith('.html')]
@@ -21,19 +21,24 @@ class TelegramParser:
         # Pre-compile regex for faster date parsing
         date_pattern = re.compile(r'(\d{2})\.(\d{2})\.(\d{4}) (\d{2}):(\d{2}):(\d{2})')
 
-        for file in html_files:
+        total_files = len(html_files)
+        for idx, file in enumerate(html_files):
             file_path = os.path.join(directory_path, file)
             self._parse_file_fast(file_path, date_pattern)
+
+            # Report progress between 10% and 90% mapping
+            if progress_callback and total_files > 0:
+                percent = 10 + int((idx + 1) / total_files * 80)
+                progress_callback(percent)
 
         return self.messages
 
     def _parse_file_fast(self, file_path, date_pattern):
         try:
-            with open(file_path, 'r', encoding='utf-8') as f:
-                content = f.read()
-
-            # Use lxml's C-based fast parser
-            tree = html.fromstring(content)
+            # ⚡ Bolt Optimization: Use lxml.html.parse directly on the file path.
+            # This avoids loading the entire multi-GB HTML string into RAM,
+            # letting lxml's C engine stream and build the tree efficiently.
+            tree = html.parse(file_path)
 
             # Find all message containers using XPath
             # This is 10x-50x faster than BeautifulSoup's find_all

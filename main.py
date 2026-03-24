@@ -126,7 +126,11 @@ class ParserThread(QThread):
             parser = TelegramParser()
             self.progress.emit(10) # parsing started
 
-            messages = parser.parse_directory(self.directory)
+            # Pass a callback so parser can update the UI per file parsed
+            messages = parser.parse_directory(
+                self.directory,
+                progress_callback=lambda p: self.progress.emit(p)
+            )
             self.progress.emit(90) # parsing finished
 
             self.finished.emit(messages)
@@ -572,14 +576,26 @@ class TGReaderApp(QMainWindow):
                 results = temp_features.smart_search(query)
 
         self.search_results_list.clear()
-        for msg in results:
+
+        # UI Performance protection: Cap left-panel list items to prevent QListWidget from freezing.
+        # The main view (chat_list_view) is virtualized and can handle all results,
+        # but the simple QListWidget cannot handle tens of thousands.
+        MAX_UI_RESULTS = 500
+        display_results = results[:MAX_UI_RESULTS]
+
+        for msg in display_results:
             time_str = msg['timestamp'].strftime('%Y-%m-%d') if msg.get('timestamp') else ""
-            item = QListWidgetItem(f"[{time_str}] {msg['sender']}: {msg['text'][:50]}...")
+            item = QListWidgetItem(f"[{time_str}] {msg['sender']}: {msg.get('text', '')[:50]}...")
             item.setData(Qt.ItemDataRole.UserRole, msg['id'])
             self.search_results_list.addItem(item)
 
+        if len(results) > MAX_UI_RESULTS:
+            overflow_item = QListWidgetItem(f"...и еще {len(results) - MAX_UI_RESULTS} сообщений (смотрите в основном окне)")
+            overflow_item.setFlags(Qt.ItemFlag.NoItemFlags) # Make unclickable
+            self.search_results_list.addItem(overflow_item)
+
         self.display_messages(results, highlight_text=query if not self.cb_regex.isChecked() else "")
-        self.lbl_status.setText(f"Отображено сообщений: {len(results)}")
+        self.lbl_status.setText(f"Найдено сообщений: {len(results)}")
 
     def filter_messages(self):
         # Trigger the same pipeline

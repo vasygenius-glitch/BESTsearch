@@ -1,9 +1,6 @@
-import pandas as pd
 import pymorphy3
 from rapidfuzz import fuzz, process
-from textblob import TextBlob
 from wordcloud import WordCloud
-import matplotlib.pyplot as plt
 import re
 from collections import Counter
 import io
@@ -11,7 +8,6 @@ import io
 class SmartFeatures:
     def __init__(self, messages):
         self.messages = messages
-        self.df = pd.DataFrame(messages)
         self.morph = pymorphy3.MorphAnalyzer()
 
         # Memoization cache for lemmas to massively speed up processing
@@ -85,21 +81,24 @@ class SmartFeatures:
         return results
 
     def get_analytics(self):
-        if self.df.empty:
+        if not self.messages:
             return {}
 
-        total_messages = len(self.df)
-        senders = self.df['sender'].nunique()
+        total_messages = len(self.messages)
 
-        active_days = 0
-        if 'timestamp' in self.df.columns and not self.df['timestamp'].isnull().all():
-            self.df['date'] = self.df['timestamp'].dt.date
-            active_days = self.df['date'].nunique()
+        # Calculate unique senders efficiently
+        senders = set()
+        dates = set()
+
+        for msg in self.messages:
+            senders.add(msg['sender'])
+            if msg.get('timestamp'):
+                dates.add(msg['timestamp'].date())
 
         return {
             'Total Messages': total_messages,
-            'Unique Senders': senders,
-            'Active Days': active_days
+            'Unique Senders': len(senders),
+            'Active Days': len(dates)
         }
 
     def get_word_frequency(self, top_n=50):
@@ -121,21 +120,18 @@ class SmartFeatures:
         wc = WordCloud(width=800, height=400, background_color='white', colormap='viridis')
         wc.generate_from_frequencies(words)
 
-        # Save to BytesIO object for PyQt to load
+        # Save directly using PIL to bypass matplotlib dependency
         img_buffer = io.BytesIO()
-        plt.figure(figsize=(10, 5))
-        plt.imshow(wc, interpolation='bilinear')
-        plt.axis('off')
-        plt.tight_layout(pad=0)
-        plt.savefig(img_buffer, format='png', bbox_inches='tight')
-        plt.close()
+        image = wc.to_image()
+        image.save(img_buffer, format='PNG')
         img_buffer.seek(0)
         return img_buffer.getvalue()
 
     def get_top_chatters(self):
-        if self.df.empty:
+        if not self.messages:
             return {}
-        return self.df['sender'].value_counts().head(10).to_dict()
+        counts = Counter(msg['sender'] for msg in self.messages)
+        return dict(counts.most_common(10))
 
     def regex_search(self, pattern):
         results = []
@@ -165,11 +161,9 @@ class SmartFeatures:
         return [msg for msg in self.messages if msg.get('media')]
 
     def get_time_of_day_stats(self):
-        if self.df.empty or 'timestamp' not in self.df.columns or self.df['timestamp'].isnull().all():
-            return {}
-
-        hours = self.df['timestamp'].dt.hour
-        return hours.value_counts().sort_index().to_dict()
+        hours = [msg['timestamp'].hour for msg in self.messages if msg.get('timestamp')]
+        counts = Counter(hours)
+        return dict(sorted(counts.items()))
 
     def get_context(self, target_msg_id, window=5):
         # Find the index of the message

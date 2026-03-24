@@ -36,11 +36,9 @@ def build_app():
         'pymorphy3',
         'pymorphy3_dicts_ru',
         'wordcloud',
-        'pandas',
         'matplotlib',
         'lxml',
-        'lxml.html',
-        'textblob'
+        'lxml.html'
     ]
 
     for imp in hidden_imports:
