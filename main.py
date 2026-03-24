@@ -387,22 +387,23 @@ class TGReaderApp(QMainWindow):
         html = "<html><body>"
 
         for msg in messages_to_display:
-            sender = html.escape(msg['sender'])
+            import html as html_lib
+            sender = html_lib.escape(msg['sender'])
             time_str = msg['timestamp'].strftime('%Y-%m-%d %H:%M:%S') if msg.get('timestamp') else "Unknown time"
 
             # Escape HTML characters first to prevent XSS / UI breaking
-            text = html.escape(msg.get('text', ''))
+            text = html_lib.escape(msg.get('text', ''))
 
             # Highlighting
             if highlight_text:
-                escaped_highlight = html.escape(highlight_text)
+                escaped_highlight = html_lib.escape(highlight_text)
                 if escaped_highlight.lower() in text.lower():
                     # Simple case-insensitive highlight
                     import re
                     pattern = re.compile(re.escape(escaped_highlight), re.IGNORECASE)
                     text = pattern.sub(lambda m: f'<span style="background-color: yellow; color: black;">{m.group(0)}</span>', text)
 
-            media_info = f"<br><i>[Вложение: {html.escape(msg['media'])}]</i>" if msg.get('media') else ""
+            media_info = f"<br><i>[Вложение: {html_lib.escape(msg['media'])}]</i>" if msg.get('media') else ""
 
             # Add bookmark link
             bm_link = f'<a href="bookmark:{msg["id"]}">[🔖 В закладки]</a>'
