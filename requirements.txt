@@ -1,0 +1,10 @@
+PyQt6==6.10.2
+pymorphy3==2.0.6
+pymorphy3-dicts-ru==2.4.417150.4580142
+rapidfuzz==3.14.3
+wordcloud==1.9.6
+matplotlib==3.10.8
+Pillow>=8.0.0
+lxml==6.0.2
+beautifulsoup4==4.14.3
+pyinstaller==6.19.0
